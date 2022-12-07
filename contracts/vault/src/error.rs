@@ -9,6 +9,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("WalletNotFound")]
+    WalletNotFound {},
+
     #[error("Semver parsing error: {0}")]
     SemVer(#[from] semver::Error),
 

@@ -1,20 +1,22 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
+use cosmwasm_std::Addr;
+use lock_wallet::msg::LpToken;
 
 /// Message type for `instantiate` entry_point
 #[cw_serde]
 pub struct InstantiateMsg {
-    validator_address: String,
-    wallet_contract_code_id: u64,
+    pub validator_address: String,
+    pub wallet_contract_code_id: u64,
 }
 
-/// Message type for `execute` entry_point
 #[cw_serde]
 pub enum ExecuteMsg {
-    AdminWithdraw {},
+    RetrieveTokens {},
     Deposit {
         pool_id: u64,
         duration: u64,
         share_out_min_amount: String,
+        is_superfluid_staking: bool,
     },
     Unbond {
         lock_id: u64,
@@ -25,16 +27,8 @@ pub enum ExecuteMsg {
         denom: String,
     },
     WithdrawAll {
-        lp_token_out: Option<LpToken>,
+        lp_tokens_out: Option<Vec<LpToken>>,
     }
-}
-
-#[cw_serde]
-pub struct LpToken {
-    pub pool_id: u64,
-    pub shares: String,
-    pub denom_out: String,
-    pub min_tokens: String,
 }
 
 /// Message type for `migrate` entry_point
@@ -45,15 +39,13 @@ pub struct MigrateMsg {}
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    // This example query variant indicates that any client can query the contract
-    // using `YourQuery` and it will return `YourQueryResponse`
-    // This `returns` information will be included in contract's schema
-    // which is used for client code generation.
-    //
-    // #[returns(YourQueryResponse)]
-    // YourQuery {},
+    #[returns(ConfigResponse)]
+    Config {},
 }
 
-// We define a custom struct for each query response
-// #[cw_serde]
-// pub struct YourQueryResponse {}
+#[cw_serde]
+pub struct ConfigResponse {
+    pub owner: Addr,
+    pub validator_address: String,
+    pub wallet_contract_code_id: u64,
+}

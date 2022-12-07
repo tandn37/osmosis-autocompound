@@ -5,6 +5,14 @@ use cosmwasm_std::Addr;
 #[cw_serde]
 pub struct InstantiateMsg {}
 
+#[cw_serde]
+pub struct RestakeParams {
+    pub amount: String,
+    pub denom: String,
+    pub pool_id: u64,
+    pub duration: u64,
+    pub share_out_min_amount: String,
+}
 /// Message type for `execute` entry_point
 #[cw_serde]
 pub enum ExecuteMsg {
@@ -14,6 +22,9 @@ pub enum ExecuteMsg {
         duration: u64,
         validator_address: Option<String>,
         share_out_min_amount: String,
+    },
+    Restake {
+        params: Vec<RestakeParams>,
     },
     Unbond {
         lock_id: u64,
