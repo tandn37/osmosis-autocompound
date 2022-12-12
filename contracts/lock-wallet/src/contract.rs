@@ -49,9 +49,7 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     OWNER.save(deps.storage, &info.sender)?;
-    Ok(Response::new()
-        .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender.to_string()))
+    Ok(Response::new())
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -156,7 +154,6 @@ pub mod execute {
             SubMsg::reply_on_success(join_pool_msg, RESTAKE_ADD_LIQUIDITY_REPLY_ID)
         }).collect();
         Ok(Response::new()
-            .add_attribute("action", "restake")
             .add_submessages(submsgs)
         )
     }
@@ -181,7 +178,6 @@ pub mod execute {
             share_out_min_amount,
         };
         Ok(Response::new()
-            .add_attribute("action", "add_liquidity")
             .add_submessage(SubMsg::reply_on_success(join_pool_msg, ADD_LIQUIDITY_REPLY_ID))
         )
     }
@@ -196,7 +192,6 @@ pub mod execute {
             coins: vec![Coin { denom, amount }],
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "lock_tokens")
             .add_message(lock_msg)
         )
     }
@@ -208,7 +203,6 @@ pub mod execute {
             coins: vec![],
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "unlock_tokens")
             .add_message(unlock_msg)
         )
     }
@@ -220,7 +214,6 @@ pub mod execute {
             val_addr: validator_address,
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "lock_and_delegate")
             .add_message(lock_and_delegate_msg)
         )
     }
@@ -235,7 +228,6 @@ pub mod execute {
             lock_id,
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "undelegate_and_unbond")
             .add_message(undelegate_msg)
             .add_message(unbond_msg)
         )   
@@ -252,7 +244,6 @@ pub mod execute {
             amount: coins(amount.u128(), denom),
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "receive_tokens")
             .add_message(send_msg)
         )
     }
@@ -263,7 +254,6 @@ pub mod execute {
             to_address: receiver, amount: balances
         }.into();
         Ok(Response::new()
-            .add_attribute("action", "receive_all_tokens")
             .add_message(transfer_msg))
     }
 
@@ -310,7 +300,6 @@ pub mod execute {
                     lp_token.min_tokens,
                 )).collect();
             Ok(Response::new()
-                .add_attribute("action", "withdraw_all")
                 .add_messages(removing_liquidity_msgs)
                 .add_submessage(SubMsg::reply_on_success(finish_removing_liquidity_msg, FINISH_REMOVING_LIQUIDITY_REPLY_ID))
             )

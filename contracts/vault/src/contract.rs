@@ -34,7 +34,7 @@ pub fn instantiate(
         owner: info.sender.clone(),
         whitelist: vec![],
         validator_address: msg.validator_address,
-        wallet_contract_code_id: msg.wallet_contract_code_id,
+        lock_wallet_contract_code_id: msg.lock_wallet_contract_code_id,
     })?;
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -81,9 +81,11 @@ pub fn execute(
         ExecuteMsg::WithdrawAll {
             lp_tokens_out
         } => execute::withdraw_all(deps, info, lp_tokens_out),
-        ExecuteMsg::UpdateWhitelist {
-            addresses
-        } => execute::update_whitelist(deps, info, addresses),
+        ExecuteMsg::UpdateConfig {
+            validator_address,
+            lock_wallet_contract_code_id,
+            whitelist,
+        } => execute::update_config(deps, info, validator_address, lock_wallet_contract_code_id, whitelist),
         ExecuteMsg::RetrieveTokens {
         } => execute::retrieve_tokens(deps, env, info),
     }
@@ -109,7 +111,7 @@ pub mod execute {
         let config = CONFIG.load(deps.storage)?;
         let instantiate_message: CosmosMsg = WasmMsg::Instantiate {
             admin: Some(env.contract.address.to_string()),
-            code_id: config.wallet_contract_code_id,
+            code_id: config.lock_wallet_contract_code_id,
             msg: to_binary(&lock_wallet::msg::InstantiateMsg {})?,
             funds: vec![],
             label: "lock_wallet".to_string(),
@@ -234,18 +236,26 @@ pub mod execute {
         Ok(())
     }
 
-    pub fn update_whitelist(deps: DepsMut, info: MessageInfo, addresses: Vec<String>) -> Result<Response, ContractError> {
+    pub fn update_config(deps: DepsMut, info: MessageInfo, validator_address: Option<String>, lock_wallet_contract_code_id: Option<u64>, whitelist: Option<Vec<String>>) -> Result<Response, ContractError> {
         validate_contract_owner(&deps, &info)?;
-        if addresses.len() > WHITELIST_MAX_LENGTH as usize {
-            return Err(ContractError::CustomError { val: "Too many whitelists".to_string() })
-        }
-        CONFIG.update(deps.storage, |mut state| -> Result<ConfigResponse, ContractError> {
-            let whitelist_addresses: Result<Vec<Addr>, _> = addresses.into_iter().map(|addr| -> Result<Addr, ContractError> {
-                let address = deps.api.addr_validate(&addr)?;
-                Ok(address)
-            }).collect();
-            state.whitelist = whitelist_addresses?;
-            Ok(state)
+        CONFIG.update(deps.storage, |mut config| -> Result<ConfigResponse, ContractError> {
+            if let Some(validator_address) = validator_address {
+                config.validator_address = validator_address;
+            }
+            if let Some(lock_wallet_contract_code_id) = lock_wallet_contract_code_id {
+                config.lock_wallet_contract_code_id = lock_wallet_contract_code_id;
+            }
+            if let Some(whitelist) = whitelist {
+                if whitelist.len() > WHITELIST_MAX_LENGTH as usize {
+                    return Err(ContractError::CustomError { val: "Too many whitelists".to_string() })
+                }
+                let whitelist_addresses: Result<Vec<Addr>, _> = whitelist.into_iter().map(|addr| -> Result<Addr, ContractError> {
+                    let address = deps.api.addr_validate(&addr)?;
+                    Ok(address)
+                }).collect();
+                config.whitelist = whitelist_addresses?;
+            }
+            Ok(config)
         })?;
         Ok(Response::new())
     }

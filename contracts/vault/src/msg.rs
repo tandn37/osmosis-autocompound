@@ -6,7 +6,7 @@ use common::msg::{LpToken, RestakeParams};
 #[cw_serde]
 pub struct InstantiateMsg {
     pub validator_address: String,
-    pub wallet_contract_code_id: u64,
+    pub lock_wallet_contract_code_id: u64,
 }
 
 #[cw_serde]
@@ -38,9 +38,11 @@ pub enum ExecuteMsg {
     WithdrawAll {
         lp_tokens_out: Option<Vec<LpToken>>,
     },
-    // only owner can update whitelist
-    UpdateWhitelist {
-        addresses: Vec<String>,
+    // only owner can update config
+    UpdateConfig {
+        validator_address: Option<String>,
+        lock_wallet_contract_code_id: Option<u64>,
+        whitelist: Option<Vec<String>>,
     },
     // only owner can retrieve tokens
     RetrieveTokens {},
@@ -74,5 +76,5 @@ pub struct ConfigResponse {
     pub owner: Addr,
     pub whitelist: Vec<Addr>,
     pub validator_address: String,
-    pub wallet_contract_code_id: u64,
+    pub lock_wallet_contract_code_id: u64,
 }
