@@ -1,0 +1,277 @@
+{
+  "contract_name": "lock-wallet",
+  "contract_version": "0.1.0",
+  "idl_version": "1.0.0",
+  "instantiate": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "InstantiateMsg",
+    "description": "Message type for `instantiate` entry_point",
+    "type": "object",
+    "additionalProperties": false
+  },
+  "execute": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ExecuteMsg",
+    "description": "Message type for `execute` entry_point",
+    "oneOf": [
+      {
+        "type": "object",
+        "required": [
+          "send"
+        ],
+        "properties": {
+          "send": {
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "deposit"
+        ],
+        "properties": {
+          "deposit": {
+            "type": "object",
+            "required": [
+              "duration",
+              "pool_id",
+              "share_out_min_amount"
+            ],
+            "properties": {
+              "duration": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              },
+              "pool_id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              },
+              "share_out_min_amount": {
+                "type": "string"
+              },
+              "validator_address": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "restake"
+        ],
+        "properties": {
+          "restake": {
+            "type": "object",
+            "required": [
+              "params"
+            ],
+            "properties": {
+              "params": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/RestakeParams"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "unbond"
+        ],
+        "properties": {
+          "unbond": {
+            "type": "object",
+            "required": [
+              "is_superfluid_staking",
+              "lock_id"
+            ],
+            "properties": {
+              "is_superfluid_staking": {
+                "type": "boolean"
+              },
+              "lock_id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "withdraw"
+        ],
+        "properties": {
+          "withdraw": {
+            "type": "object",
+            "required": [
+              "amount",
+              "denom",
+              "receiver"
+            ],
+            "properties": {
+              "amount": {
+                "type": "string"
+              },
+              "denom": {
+                "type": "string"
+              },
+              "receiver": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "withdraw_all"
+        ],
+        "properties": {
+          "withdraw_all": {
+            "type": "object",
+            "required": [
+              "receiver"
+            ],
+            "properties": {
+              "lp_tokens_out": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/definitions/LpToken"
+                }
+              },
+              "receiver": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    ],
+    "definitions": {
+      "LpToken": {
+        "type": "object",
+        "required": [
+          "denom_out",
+          "min_tokens",
+          "pool_id",
+          "shares"
+        ],
+        "properties": {
+          "denom_out": {
+            "type": "string"
+          },
+          "min_tokens": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "shares": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestakeParams": {
+        "type": "object",
+        "required": [
+          "amount",
+          "denom",
+          "duration",
+          "pool_id",
+          "share_out_min_amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "denom": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "pool_id": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "share_out_min_amount": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "query": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "QueryMsg",
+    "description": "Message type for `query` entry_point",
+    "oneOf": [
+      {
+        "type": "object",
+        "required": [
+          "get_owner"
+        ],
+        "properties": {
+          "get_owner": {
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    ]
+  },
+  "migrate": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "MigrateMsg",
+    "description": "Message type for `migrate` entry_point",
+    "type": "object",
+    "additionalProperties": false
+  },
+  "sudo": null,
+  "responses": {
+    "get_owner": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Addr",
+      "description": "A human readable address.\n\nIn Cosmos, this is typically bech32 encoded. But for multi-chain smart contracts no assumptions should be made other than being UTF-8 encoded and of reasonable length.\n\nThis type represents a validated address. It can be created in the following ways 1. Use `Addr::unchecked(input)` 2. Use `let checked: Addr = deps.api.addr_validate(input)?` 3. Use `let checked: Addr = deps.api.addr_humanize(canonical_addr)?` 4. Deserialize from JSON. This must only be done from JSON that was validated before such as a contract's state. `Addr` must not be used in messages sent by the user because this would result in unvalidated instances.\n\nThis type is immutable. If you really need to mutate it (Really? Are you sure?), create a mutable copy using `let mut mutable = Addr::to_string()` and operate on that `String` instance.",
+      "type": "string"
+    }
+  }
+}

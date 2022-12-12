@@ -1,3 +1,4 @@
+use common::msg::{LpToken, RestakeParams};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Addr;
 
@@ -5,14 +6,6 @@ use cosmwasm_std::Addr;
 #[cw_serde]
 pub struct InstantiateMsg {}
 
-#[cw_serde]
-pub struct RestakeParams {
-    pub amount: String,
-    pub denom: String,
-    pub pool_id: u64,
-    pub duration: u64,
-    pub share_out_min_amount: String,
-}
 /// Message type for `execute` entry_point
 #[cw_serde]
 pub enum ExecuteMsg {
@@ -44,14 +37,6 @@ pub enum ExecuteMsg {
 /// Message type for `migrate` entry_point
 #[cw_serde]
 pub struct MigrateMsg {}
-
-#[cw_serde]
-pub struct LpToken {
-    pub pool_id: u64,
-    pub shares: String,
-    pub denom_out: String,
-    pub min_tokens: String,
-}
 
 /// Message type for `query` entry_point
 #[cw_serde]

@@ -13,7 +13,13 @@ use semver::Version;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 
-use crate::state::{OWNER, DEPOSIT_PARAMS_REPLY_STATE, DepositParams, RECEIVER_REPLY_STATE};
+use crate::state::{
+    OWNER,
+    DEPOSIT_PARAMS_REPLY_STATE,
+    DepositParams,
+    RECEIVER_REPLY_STATE,
+    RESTAKE_PARAMS_REPLY_STATE,
+};
 
 use osmosis_std::types::osmosis::gamm::v1beta1::{
     MsgJoinSwapExternAmountIn, MsgExitSwapShareAmountIn, MsgExitSwapShareAmountInResponse,
@@ -83,7 +89,7 @@ pub fn execute(
         } => execute::deposit(deps, env, info, pool_id, duration, validator_address, share_out_min_amount),
         ExecuteMsg::Restake {
             params,
-        } => execute::restake(deps, env, params),
+        } => execute::restake(deps, env, info, params),
         ExecuteMsg::Unbond {
             lock_id, is_superfluid_staking,
         } => execute::unbond(deps, env, info, lock_id, is_superfluid_staking),
@@ -102,7 +108,7 @@ pub mod execute {
     use cosmwasm_std::{CosmosMsg, BankMsg, Uint128};
     use osmosis_std::{types::cosmos::base::v1beta1::Coin, shim::Duration};
 
-    use crate::{msg::{LpToken, RestakeParams}, state::RESTAKE_PARAMS_REPLY_STATE};
+    use common::msg::{LpToken, RestakeParams};
 
     use super::*;
 
@@ -133,8 +139,9 @@ pub mod execute {
     }
 
     pub fn restake(
-        deps: DepsMut, env: Env, params: Vec<RestakeParams>,
+        deps: DepsMut, env: Env, info: MessageInfo, params: Vec<RestakeParams>,
     ) -> Result<Response, ContractError> {
+        validate_owner(&deps, &info)?;
         if params.is_empty() {
             return Err(ContractError::CustomError { val: "Restake params not found".to_string() })
         }
@@ -345,7 +352,7 @@ pub fn reply(
 
 pub mod reply {
     use osmosis_std::types::osmosis::gamm::v1beta1::MsgJoinSwapExternAmountInResponse;
-    use crate::{helper, state::RESTAKE_PARAMS_REPLY_STATE};
+    use crate::helper;
 
     use super::*;
 

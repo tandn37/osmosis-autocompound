@@ -1,21 +1,23 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
+    CosmosMsg, WasmMsg, SubMsg, BankMsg, Addr, Order,
     Binary, Deps, DepsMut, Env, MessageInfo, Reply,
     Response, StdResult, StdError, to_binary};
 use cw2::{get_contract_version, set_contract_version};
 use semver::Version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg, ConfigResponse};
+use crate::msg::{
+    ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg, ConfigResponse, RestakeLockWallet,
+};
 use crate::state::{CONFIG, USER_LOCK_WALLET_MAPPING, DEPOSIT_PARAMS_REPLY_STATE, DepositParams};
 
-use lock_wallet;
-
-use self::reply::handle_instantiate_lock_wallet;
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:vault";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const WHITELIST_MAX_LENGTH: u64 = 5;
 
 const INSTANTIATE_LOCK_WALLET_REPLY_ID: u64 = 1;
 
@@ -30,6 +32,7 @@ pub fn instantiate(
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG.save(deps.storage, &ConfigResponse {
         owner: info.sender.clone(),
+        whitelist: vec![],
         validator_address: msg.validator_address,
         wallet_contract_code_id: msg.wallet_contract_code_id,
     })?;
@@ -66,6 +69,9 @@ pub fn execute(
         ExecuteMsg::Deposit {
             pool_id, duration, share_out_min_amount, is_superfluid_staking
         } => execute::deposit(deps, env, info, pool_id, duration, share_out_min_amount, is_superfluid_staking),
+        ExecuteMsg::Restake {
+            lock_wallets
+        } => execute::restake(deps, info, lock_wallets),
         ExecuteMsg::Unbond {
             lock_id, is_superfluid_staking
         } => execute::unbond(deps, info, lock_id, is_superfluid_staking),
@@ -75,18 +81,19 @@ pub fn execute(
         ExecuteMsg::WithdrawAll {
             lp_tokens_out
         } => execute::withdraw_all(deps, info, lp_tokens_out),
+        ExecuteMsg::UpdateWhitelist {
+            addresses
+        } => execute::update_whitelist(deps, info, addresses),
         ExecuteMsg::RetrieveTokens {
         } => execute::retrieve_tokens(deps, env, info),
     }
 }
 
 pub mod execute {
-    use std::vec;
-
-    use cosmwasm_std::{BankMsg, CosmosMsg, WasmMsg, SubMsg, Addr};
-    use lock_wallet::msg::LpToken;
-
     use super::*;
+    use lock_wallet;
+    use common::msg::{LpToken};
+
 
     fn get_lock_wallet(deps: &DepsMut, info: &MessageInfo) -> Result<Addr, ContractError> {
         let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, &info.sender)?;
@@ -218,6 +225,49 @@ pub mod execute {
         Ok(())
     }
 
+    // owner is in whitelist by default
+    fn validate_contract_whitelist(deps: &DepsMut, info: &MessageInfo) -> Result<(), ContractError> {
+        let config = CONFIG.load(deps.storage)?;
+        if info.sender != config.owner && !config.whitelist.contains(&info.sender) {
+            return Err(ContractError::Unauthorized {  });
+        }
+        Ok(())
+    }
+
+    pub fn update_whitelist(deps: DepsMut, info: MessageInfo, addresses: Vec<String>) -> Result<Response, ContractError> {
+        validate_contract_owner(&deps, &info)?;
+        if addresses.len() > WHITELIST_MAX_LENGTH as usize {
+            return Err(ContractError::CustomError { val: "Too many whitelists".to_string() })
+        }
+        CONFIG.update(deps.storage, |mut state| -> Result<ConfigResponse, ContractError> {
+            let whitelist_addresses: Result<Vec<Addr>, _> = addresses.into_iter().map(|addr| -> Result<Addr, ContractError> {
+                let address = deps.api.addr_validate(&addr)?;
+                Ok(address)
+            }).collect();
+            state.whitelist = whitelist_addresses?;
+            Ok(state)
+        })?;
+        Ok(Response::new())
+    }
+
+    pub fn restake(deps: DepsMut, info: MessageInfo, lock_wallets: Vec<RestakeLockWallet>) -> Result<Response, ContractError> {
+        validate_contract_whitelist(&deps, &info)?;
+        let msgs: Result<Vec<CosmosMsg>, _> = lock_wallets.into_iter().map(|item| -> Result<CosmosMsg, ContractError> {
+            let contract_address = deps.api.addr_validate(&item.contract_address)?;
+            Ok(WasmMsg::Execute {
+                contract_addr: contract_address.to_string(),
+                msg: to_binary(&lock_wallet::msg::ExecuteMsg::Restake {
+                    params: item.params,
+                })?,
+                funds: vec![],
+            }.into())
+        }).collect();
+        Ok(Response::new()
+            .add_attribute("action", "restake")
+            .add_messages(msgs?)
+        )
+    }
+
     // admin usage only, to get tokens which are sent to the contract unintentionaly
     pub fn retrieve_tokens(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
         validate_contract_owner(&deps, &info)?;
@@ -234,14 +284,45 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::Config {  } => to_binary(&CONFIG.load(deps.storage)?)
+        QueryMsg::Config {  } => to_binary(&CONFIG.load(deps.storage)?),
+        QueryMsg::GetTotalAccount {  } => to_binary(&query::get_total_account(deps)?),
+        QueryMsg::GetLockWalletByAccount { address } => to_binary(&query::get_lock_wallet_by_account(deps, address)?),
+        QueryMsg::GetAccounts { limit, last_value } => to_binary(&query::get_accounts(deps, limit, last_value)?),
+    }
+}
+
+pub mod query {
+    use cw_storage_plus::Bound;
+
+    use super::*;
+
+    pub fn get_lock_wallet_by_account(deps: Deps, address: String) -> StdResult<Addr> {
+        let address = deps.api.addr_validate(&address)?;
+        let wallet_address = USER_LOCK_WALLET_MAPPING.load(deps.storage, &address)?;
+        Ok(wallet_address)
+    }
+
+    pub fn get_total_account(deps: Deps) -> StdResult<u64> {
+        Ok(USER_LOCK_WALLET_MAPPING
+            .range(deps.storage, None, None, Order::Ascending)
+            .count() as u64
+        )
+    }
+
+    pub fn get_accounts(deps: Deps, limit: u64, last_value: Option<String>) -> StdResult<Vec<(Addr, Addr)>> {
+        let min_value = last_value.map(|s| Bound::ExclusiveRaw(s.into()));
+        let wallets: StdResult<Vec<(Addr, Addr)>> = USER_LOCK_WALLET_MAPPING 
+            .range(deps.storage, min_value, None, Order::Ascending)
+            .take(limit as usize)
+            .collect();
+        wallets
     }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
     match msg.id {
-        INSTANTIATE_LOCK_WALLET_REPLY_ID => handle_instantiate_lock_wallet(deps, msg),
+        INSTANTIATE_LOCK_WALLET_REPLY_ID => reply::handle_instantiate_lock_wallet(deps, msg),
         id => Err(ContractError::CustomError { val: format!("Unknow reply id: {}", id) } ),
     }
 }
