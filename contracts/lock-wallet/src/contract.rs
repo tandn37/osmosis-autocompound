@@ -3,8 +3,8 @@ use std::env;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, Addr,
-    StdResult, to_binary, coins, SubMsg, SubMsgResponse, SubMsgResult,
+    CosmosMsg, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, Addr,
+    StdResult, to_binary, SubMsg, SubMsgResponse, SubMsgResult,
 };
 use cw2::{get_contract_version, set_contract_version};
 
@@ -12,32 +12,39 @@ use semver::Version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::helper::{
+    get_lp_denom,
+};
+use crate::osmosis_msg::{
+    get_single_transfer_msg,
+    get_transfer_msg,
+    get_add_liquidity_msg,
+    get_swap_msg,
+    get_remove_liquidity_msg,
+    get_superfluid_lock_and_delegate_msg,
+    get_superfluid_undelegate_msg,
+    get_superfluid_unbond_msg,
+    get_lock_tokens_msg,
+    get_unlock_msg,
+};
+use common::types::{RemoveLiquidityParams, SwapParams, AddLiquidityParams};
 
 use crate::state::{
     OWNER,
     DEPOSIT_PARAMS_REPLY_STATE,
-    DepositParams,
+    DepositParamsState,
+    RestakeParamsState,
     RECEIVER_REPLY_STATE,
-    RESTAKE_PARAMS_REPLY_STATE,
+    RESTAKE_REPLY_STATE,
 };
 
-use osmosis_std::types::osmosis::gamm::v1beta1::{
-    MsgJoinSwapExternAmountIn, MsgExitSwapShareAmountIn, MsgExitSwapShareAmountInResponse,
-};
-use osmosis_std::types::osmosis::lockup::{
-    MsgLockTokens, MsgBeginUnlocking,
-};
-use osmosis_std::types::osmosis::superfluid::{
-    MsgLockAndSuperfluidDelegate, MsgSuperfluidUndelegate, MsgSuperfluidUnbondLock,
-};
-
-// version info for migration info
 const CONTRACT_NAME: &str = "crates.io:lock-wallet";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const ADD_LIQUIDITY_REPLY_ID: u64 = 1;
 const FINISH_REMOVING_LIQUIDITY_REPLY_ID: u64 = 2;
-const RESTAKE_ADD_LIQUIDITY_REPLY_ID: u64 = 3;
+const RESTAKE_SWAP_REPLY_ID: u64 = 3;
+const RESTAKE_ADD_LIQUIDITY_REPLY_ID: u64 = 4;
 
 /// Handling contract instantiation
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -78,7 +85,6 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Send {  } => Ok(Response::new()),
         ExecuteMsg::Deposit {
             pool_id,
             duration,
@@ -86,8 +92,8 @@ pub fn execute(
             share_out_min_amount
         } => execute::deposit(deps, env, info, pool_id, duration, validator_address, share_out_min_amount),
         ExecuteMsg::Restake {
-            params,
-        } => execute::restake(deps, env, info, params),
+            add_liquidity: al, duration, swap,
+        } => execute::restake(deps, env, info, al, duration, swap),
         ExecuteMsg::Unbond {
             lock_id, is_superfluid_staking,
         } => execute::unbond(deps, env, info, lock_id, is_superfluid_staking),
@@ -101,13 +107,6 @@ pub fn execute(
 }
 
 pub mod execute {
-    use std::str::FromStr;
-
-    use cosmwasm_std::{CosmosMsg, BankMsg, Uint128};
-    use osmosis_std::{types::cosmos::base::v1beta1::Coin, shim::Duration};
-
-    use common::msg::{LpToken, RestakeParams};
-
     use super::*;
 
     pub fn validate_owner(deps: &DepsMut, info: &MessageInfo) -> Result<(), ContractError> {
@@ -130,32 +129,48 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         validate_owner(&deps, &info)?;
         let fund = validate_funds(&info)?;
-        DEPOSIT_PARAMS_REPLY_STATE.save(deps.storage, &DepositParams {
+        DEPOSIT_PARAMS_REPLY_STATE.save(deps.storage, &DepositParamsState {
             pool_id, duration, validator_address,
         })?;
-        add_liquidity(env.contract.address.to_string(), pool_id, fund.amount.to_string(), fund.denom, share_out_min_amount)
+        let join_pool_msg = get_add_liquidity_msg(
+            env.contract.address.to_string(),
+            pool_id,
+            fund.amount.to_string(),
+            fund.denom,
+            share_out_min_amount,
+        );
+        Ok(Response::new()
+            .add_submessage(SubMsg::reply_on_success(join_pool_msg, ADD_LIQUIDITY_REPLY_ID))
+        )
     }
 
     pub fn restake(
-        deps: DepsMut, env: Env, info: MessageInfo, params: Vec<RestakeParams>,
+        deps: DepsMut, env: Env, info: MessageInfo,
+        al: AddLiquidityParams, duration: u64, swap: Option<SwapParams>,
     ) -> Result<Response, ContractError> {
         validate_owner(&deps, &info)?;
-        if params.is_empty() {
-            return Err(ContractError::CustomError { val: "Restake params not found".to_string() })
+        RESTAKE_REPLY_STATE.save(deps.storage, &RestakeParamsState {
+            pool_id: al.pool_id,
+            duration,
+            share_out_min_amount: al.share_out_min_amount.clone(),
+            swap_denom_out: swap.clone().map(|i| i.denom_out),
+        })?;
+        let contract_address = env.contract.address.to_string();
+        if let Some(swap_params) = swap {
+            let swap_msg = get_swap_msg(
+                contract_address, swap_params.pool_id, al.amount, al.denom,
+                swap_params.amount_out_min, swap_params.denom_out,
+            );
+            Ok(Response::new()
+                .add_submessage(SubMsg::reply_on_success(swap_msg, RESTAKE_SWAP_REPLY_ID)))
+        } else {
+            let add_liquidity_msg = get_add_liquidity_msg(
+                contract_address, al.pool_id, al.amount, al.denom, al.share_out_min_amount
+            );
+            Ok(Response::new()
+                .add_submessage(SubMsg::reply_on_success(add_liquidity_msg, RESTAKE_ADD_LIQUIDITY_REPLY_ID))
+            )
         }
-        RESTAKE_PARAMS_REPLY_STATE.save(deps.storage, &params)?;
-        let submsgs: Vec<SubMsg> = params.into_iter().map(|item| {
-            let join_pool_msg = MsgJoinSwapExternAmountIn {
-                sender: env.contract.address.to_string(),
-                pool_id: item.pool_id,
-                token_in: Some(Coin { amount: item.amount, denom: item.denom }),
-                share_out_min_amount: item.share_out_min_amount,
-            };
-            SubMsg::reply_on_success(join_pool_msg, RESTAKE_ADD_LIQUIDITY_REPLY_ID)
-        }).collect();
-        Ok(Response::new()
-            .add_submessages(submsgs)
-        )
     }
 
     pub fn unbond(deps: DepsMut, env: Env, info: MessageInfo, lock_id: u64, is_superfluid_staking: bool) -> Result<Response, ContractError> {
@@ -168,65 +183,34 @@ pub mod execute {
         }
     }
 
-    fn add_liquidity(
-        owner: String, pool_id: u64, amount: String, denom: String, share_out_min_amount: String,
-    ) -> Result<Response, ContractError> {
-        let join_pool_msg = MsgJoinSwapExternAmountIn {
-            sender: owner,
-            pool_id,
-            token_in: Some(Coin { amount, denom }),
-            share_out_min_amount,
-        };
-        Ok(Response::new()
-            .add_submessage(SubMsg::reply_on_success(join_pool_msg, ADD_LIQUIDITY_REPLY_ID))
-        )
-    }
-
     pub fn lock(owner: String, duration: u64, amount: String, denom: String) -> Result<Response, ContractError> {
-        let lock_msg: CosmosMsg = MsgLockTokens {
-            owner,
-            duration: Some(Duration {
-                seconds: duration as i64,
-                nanos: 0,
-            }),
-            coins: vec![Coin { denom, amount }],
-        }.into();
+        let lock_msg = get_lock_tokens_msg(owner, duration, amount, denom);
         Ok(Response::new()
             .add_message(lock_msg)
         )
     }
 
     pub fn unlock(owner: String, lock_id: u64) -> Result<Response, ContractError> {
-        let unlock_msg: CosmosMsg = MsgBeginUnlocking {
-            owner,
-            id: lock_id,
-            coins: vec![],
-        }.into();
+        let unlock_msg = get_unlock_msg(owner, lock_id);
         Ok(Response::new()
             .add_message(unlock_msg)
         )
     }
 
-    pub fn superfluid_lock_and_delegate(owner: String, amount: String, denom: String, validator_address: String) -> Result<Response, ContractError> {
-        let lock_and_delegate_msg: CosmosMsg = MsgLockAndSuperfluidDelegate {
-            sender: owner,
-            coins: vec![Coin { denom, amount }],
-            val_addr: validator_address,
-        }.into();
+    pub fn superfluid_lock_and_delegate(
+        owner: String, amount: String, denom: String, validator_address: String
+    ) -> Result<Response, ContractError> {
+        let lock_and_delegate_msg = get_superfluid_lock_and_delegate_msg(
+            owner, amount, denom, validator_address,
+        );
         Ok(Response::new()
             .add_message(lock_and_delegate_msg)
         )
     }
 
     pub fn superfluid_undelegate_and_unbond(owner: String, lock_id: u64) -> Result<Response, ContractError> {
-        let undelegate_msg: CosmosMsg = MsgSuperfluidUndelegate {
-            sender: owner.clone(),
-            lock_id,
-        }.into();
-        let unbond_msg: CosmosMsg = MsgSuperfluidUnbondLock {
-            sender: owner,
-            lock_id,
-        }.into();
+        let undelegate_msg = get_superfluid_undelegate_msg(owner.clone(), lock_id);
+        let unbond_msg = get_superfluid_unbond_msg(owner, lock_id);
         Ok(Response::new()
             .add_message(undelegate_msg)
             .add_message(unbond_msg)
@@ -238,11 +222,7 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         validate_owner(&deps, &info)?;
         deps.api.addr_validate(&receiver)?;
-        let amount = Uint128::from_str(&amount).unwrap();
-        let send_msg: CosmosMsg = BankMsg::Send {
-            to_address: receiver,
-            amount: coins(amount.u128(), denom),
-        }.into();
+        let send_msg = get_single_transfer_msg(receiver, amount, denom); 
         Ok(Response::new()
             .add_message(send_msg)
         )
@@ -250,23 +230,9 @@ pub mod execute {
 
     pub fn send_all_balances(deps: DepsMut, env: Env, receiver: String) -> Result<Response, ContractError> {
         let balances = deps.querier.query_all_balances(env.contract.address.to_string())?;
-        let transfer_msg: CosmosMsg = BankMsg::Send {
-            to_address: receiver, amount: balances
-        }.into();
+        let transfer_msg = get_transfer_msg(receiver, balances);
         Ok(Response::new()
             .add_message(transfer_msg))
-    }
-
-    pub fn get_remove_liquidity_msg(
-        owner: String, pool_id: u64, shares: String, denom_out: String, min_tokens: String
-    ) -> CosmosMsg {
-        MsgExitSwapShareAmountIn {
-            sender: owner,
-            pool_id,
-            token_out_denom: denom_out,
-            share_in_amount: shares,
-            token_out_min_amount: min_tokens,
-        }.into()
     }
 
     /* 
@@ -274,7 +240,7 @@ pub mod execute {
         If lp_tokens_out has multiple values, only add the reply callback for the last element
         After receiveing the reply, transfer all tokens to the receiver
     */
-    pub fn withdraw_all(deps: DepsMut, env: Env, info: MessageInfo, receiver: String, lp_tokens_out: Option<Vec<LpToken>>) -> Result<Response, ContractError> {
+    pub fn withdraw_all(deps: DepsMut, env: Env, info: MessageInfo, receiver: String, lp_tokens_out: Option<Vec<RemoveLiquidityParams>>) -> Result<Response, ContractError> {
         validate_owner(&deps, &info)?;
         deps.api.addr_validate(&receiver)?;
         if let Some(mut removing_lp_tokens) = lp_tokens_out {
@@ -334,15 +300,16 @@ pub fn reply(
     match msg.id {
         ADD_LIQUIDITY_REPLY_ID => reply::handle_add_liquidity(deps, env, msg),
         FINISH_REMOVING_LIQUIDITY_REPLY_ID => reply::handle_remove_liquidity(deps, env, msg),
+        RESTAKE_SWAP_REPLY_ID => reply::handle_swap(deps, env, msg),
         RESTAKE_ADD_LIQUIDITY_REPLY_ID => reply::handle_restake_add_liquidity(deps, env, msg),
         _id => Err(ContractError::CustomError { val: format!("Unknow reply id {}", msg.id) }),
     }
 }
 
 pub mod reply {
-    use osmosis_std::types::osmosis::gamm::v1beta1::MsgJoinSwapExternAmountInResponse;
-    use crate::helper;
-
+    use osmosis_std::types::osmosis::gamm::v1beta1::{
+        MsgJoinSwapExternAmountInResponse, MsgExitSwapShareAmountInResponse, MsgSwapExactAmountInResponse
+    };
     use super::*;
 
     pub fn handle_add_liquidity(
@@ -352,7 +319,7 @@ pub mod reply {
             if let Some(b) = data {
                 let deposit_params = DEPOSIT_PARAMS_REPLY_STATE.load(deps.storage)?;
                 let response: MsgJoinSwapExternAmountInResponse = b.try_into().map_err(ContractError::Std)?;
-                let denom = helper::get_lp_denom(deposit_params.pool_id);
+                let denom = get_lp_denom(deposit_params.pool_id);
                 let contract_address = env.contract.address.to_string();
                 DEPOSIT_PARAMS_REPLY_STATE.remove(deps.storage);
                 if let Some(validator_address) = deposit_params.validator_address {
@@ -361,10 +328,32 @@ pub mod reply {
                     return execute::lock(contract_address, deposit_params.duration, response.share_out_amount, denom);
                 }
             } else {
-                return Err(ContractError::FailAddLiquidity { val: "Empty response".to_string() })
+                return Err(ContractError::AddLiquidityError { val: "Empty response".to_string() })
             }
         }
-        Err(ContractError::FailAddLiquidity { val: msg.result.unwrap_err() })
+        Err(ContractError::AddLiquidityError { val: msg.result.unwrap_err() })
+    }
+
+    pub fn handle_swap(
+        deps: DepsMut, env: Env, msg: Reply,
+    ) -> Result<Response, ContractError> {
+        if let SubMsgResult::Ok(SubMsgResponse { data: Some(b), .. }) = msg.result {
+            let restake_params = RESTAKE_REPLY_STATE.load(deps.storage)?;
+            let swap_result: MsgSwapExactAmountInResponse = b.try_into().map_err(ContractError::Std)?;
+            let add_liquidity_msg = get_add_liquidity_msg(
+                env.contract.address.to_string(),
+                restake_params.pool_id,
+                swap_result.token_out_amount,
+                restake_params.swap_denom_out.unwrap(),
+                restake_params.share_out_min_amount
+            );
+            return Ok(Response::new()
+                .add_submessage(SubMsg::reply_on_success(add_liquidity_msg, RESTAKE_ADD_LIQUIDITY_REPLY_ID))
+            )
+        }
+        Err(ContractError::SwapError {
+            val: msg.result.unwrap_err(),
+        })
     }
 
     pub fn handle_remove_liquidity(deps: DepsMut, env: Env, msg: Reply) -> Result<Response, ContractError> {
@@ -376,37 +365,27 @@ pub mod reply {
                 return execute::send_all_balances(deps, env, receiver);
                
             } else {
-                return Err(ContractError::FailRemoveLiquidity { val: "Empty response".to_string() })
+                return Err(ContractError::RemoveLiquidityError { val: "Empty response".to_string() })
             }
         }
-        Err(ContractError::FailRemoveLiquidity { val: msg.result.unwrap_err() })
+        Err(ContractError::RemoveLiquidityError { val: msg.result.unwrap_err() })
     }
 
-    /*
-        RESTAKE_PARAMS_REPLY_STATE is saved as the whole array in state
-        Due to array of submsg is executed sequencely, the first element is for current submsg reply
-        Remove it from the array after handling to prepare data for the next submsg reply
-    */
     pub fn handle_restake_add_liquidity(deps: DepsMut, env: Env, msg: Reply) -> Result<Response, ContractError> {
         if let SubMsgResult::Ok(SubMsgResponse { data, .. }) = msg.result.clone() {
             if let Some(b) = data {
-                let mut restake_params = RESTAKE_PARAMS_REPLY_STATE.load(deps.storage)?;
-                let first_restake_params = restake_params.remove(0);
-                let denom = helper::get_lp_denom(first_restake_params.pool_id);
-                
+                let restake_params = RESTAKE_REPLY_STATE.load(deps.storage)?;
                 let response: MsgJoinSwapExternAmountInResponse = b.try_into().map_err(ContractError::Std)?;
                 
                 let contract_address = env.contract.address.to_string();
-                if restake_params.is_empty() {
-                    RESTAKE_PARAMS_REPLY_STATE.remove(deps.storage);
-                } else {
-                    RESTAKE_PARAMS_REPLY_STATE.save(deps.storage, &restake_params)?;
-                }
-                return execute::lock(contract_address, first_restake_params.duration, response.share_out_amount, denom);
+                let denom = get_lp_denom(restake_params.pool_id);
+
+                RESTAKE_REPLY_STATE.remove(deps.storage);
+                return execute::lock(contract_address, restake_params.duration, response.share_out_amount, denom);
             } else {
-                return Err(ContractError::FailAddLiquidity { val: "Empty response".to_string() })
+                return Err(ContractError::AddLiquidityError { val: "Empty response".to_string() })
             }
         }
-        Err(ContractError::FailAddLiquidity { val: msg.result.unwrap_err() })
+        Err(ContractError::AddLiquidityError { val: msg.result.unwrap_err() })
     }
 }

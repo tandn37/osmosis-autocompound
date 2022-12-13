@@ -12,11 +12,14 @@ pub enum ContractError {
     #[error("InvalidFunds")]
     InvalidFunds {},
 
+    #[error["Fail to swap: {val:?}"]]
+    SwapError { val: String },
+
     #[error["Fail to add liquidity: {val:?}"]]
-    FailAddLiquidity { val: String },
+    AddLiquidityError { val: String },
 
     #[error["Fail to remove liquidity: {val:?}"]]
-    FailRemoveLiquidity { val: String },
+    RemoveLiquidityError { val: String },
 
     #[error("Semver parsing error: {0}")]
     SemVer(#[from] semver::Error),

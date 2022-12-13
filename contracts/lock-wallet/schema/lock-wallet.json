@@ -81,7 +81,7 @@
               "params": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/definitions/RestakeParams"
+                  "$ref": "#/definitions/RestakeParamsState"
                 }
               }
             },
@@ -164,7 +164,7 @@
                   "null"
                 ],
                 "items": {
-                  "$ref": "#/definitions/LpToken"
+                  "$ref": "#/definitions/RemoveLiquidityParams"
                 }
               },
               "receiver": {
@@ -178,7 +178,7 @@
       }
     ],
     "definitions": {
-      "LpToken": {
+      "RemoveLiquidityParams": {
         "type": "object",
         "required": [
           "denom_out",
@@ -204,7 +204,7 @@
         },
         "additionalProperties": false
       },
-      "RestakeParams": {
+      "RestakeParamsState": {
         "type": "object",
         "required": [
           "amount",

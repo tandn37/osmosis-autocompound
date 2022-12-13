@@ -9,9 +9,9 @@ use semver::Version;
 
 use crate::error::ContractError;
 use crate::msg::{
-    ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg, ConfigResponse, RestakeLockWallet,
+    ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg, ConfigResponse, RestakeParams, ConfigParams,
 };
-use crate::state::{CONFIG, USER_LOCK_WALLET_MAPPING, DEPOSIT_PARAMS_REPLY_STATE, DepositParams};
+use crate::state::{CONFIG, USER_LOCK_WALLET_MAPPING, DEPOSIT_PARAMS_REPLY_STATE, DepositParamsState};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:vault";
@@ -35,6 +35,9 @@ pub fn instantiate(
         whitelist: vec![],
         validator_address: msg.validator_address,
         lock_wallet_contract_code_id: msg.lock_wallet_contract_code_id,
+        valid_durations: msg.valid_durations,
+        min_deposit_default: msg.min_deposit_default,
+        min_deposit_custom: None,
     })?;
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -70,22 +73,20 @@ pub fn execute(
             pool_id, duration, share_out_min_amount, is_superfluid_staking
         } => execute::deposit(deps, env, info, pool_id, duration, share_out_min_amount, is_superfluid_staking),
         ExecuteMsg::Restake {
-            lock_wallets
-        } => execute::restake(deps, info, lock_wallets),
+            params,
+        } => execute::restake(deps, info, params),
         ExecuteMsg::Unbond {
-            lock_id, is_superfluid_staking
-        } => execute::unbond(deps, info, lock_id, is_superfluid_staking),
+            lock_id, pool_id, duration, is_superfluid_staking
+        } => execute::unbond(deps, info, pool_id, duration, lock_id, is_superfluid_staking),
         ExecuteMsg::Withdraw {
-            amount, denom
-        } => execute::withdraw(deps, info, amount, denom),
+            pool_id, duration, amount, denom
+        } => execute::withdraw(deps, info, pool_id, duration, amount, denom),
         ExecuteMsg::WithdrawAll {
-            lp_tokens_out
-        } => execute::withdraw_all(deps, info, lp_tokens_out),
+            pool_id, duration, lp_tokens_out
+        } => execute::withdraw_all(deps, info, pool_id, duration, lp_tokens_out),
         ExecuteMsg::UpdateConfig {
-            validator_address,
-            lock_wallet_contract_code_id,
-            whitelist,
-        } => execute::update_config(deps, info, validator_address, lock_wallet_contract_code_id, whitelist),
+            config: nconfig,
+        } => execute::update_config(deps, info, nconfig),
         ExecuteMsg::RetrieveTokens {
         } => execute::retrieve_tokens(deps, env, info),
     }
@@ -93,14 +94,14 @@ pub fn execute(
 
 pub mod execute {
     use super::*;
+    use cosmwasm_std::Uint128;
     use lock_wallet;
-    use common::msg::{LpToken};
+    use common::types::{RemoveLiquidityParams};
 
-
-    fn get_lock_wallet(deps: &DepsMut, info: &MessageInfo) -> Result<Addr, ContractError> {
-        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, &info.sender)?;
+    fn get_lock_wallet(deps: &DepsMut, info: &MessageInfo, pool_id: u64, duration: u64) -> Result<Addr, ContractError> {
+        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, (&info.sender, (pool_id, duration)))?;
         if wallet.is_none() {
-            return Err(ContractError::WalletNotFound {  })
+            return Err(ContractError::ValidationError { val: "Wallet not found".to_string() })
         }
         Ok(wallet.unwrap())
     }
@@ -123,7 +124,7 @@ pub mod execute {
     }
 
     pub fn deposit_to_lock_wallet(
-        deps: DepsMut, wallet_address: String, deposit_params: DepositParams,
+        deps: DepsMut, wallet_address: String, deposit_params: DepositParamsState,
     ) -> Result<Response, ContractError> {
         let config = CONFIG.load(deps.storage)?;
         let validator_address = if deposit_params.is_superfluid_staking {
@@ -146,11 +147,31 @@ pub mod execute {
         )
     }
 
+    fn validate_min_deposit_and_duration(deps: &DepsMut, info: &MessageInfo, duration: u64) -> Result<(), ContractError> {
+        let config = CONFIG.load(deps.storage)?;
+        let has_invalid_fund = info.funds.clone().into_iter().any(|fund| {
+            if let Some(min_deposit_custom) = config.min_deposit_custom.clone() {
+                let &min_deposit = min_deposit_custom.get(&fund.denom).unwrap_or(&config.min_deposit_default);
+                fund.amount < Uint128::from(min_deposit)
+            } else {
+                fund.amount < Uint128::from(config.min_deposit_default)
+            }
+        });
+        if has_invalid_fund {
+            return Err(ContractError::ValidationError { val: "Fund is too low".to_string() })
+        }
+        if !config.valid_durations.contains(&duration) {
+            return Err(ContractError::ValidationError { val: "Duration is invalid".to_string() })
+        }
+        Ok(())
+    }
+
     pub fn deposit(
         deps: DepsMut, env: Env, info: MessageInfo, pool_id: u64, duration: u64, share_out_min_amount: String, is_superfluid_staking: bool,
     ) -> Result<Response, ContractError> {
-        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, &info.sender)?;
-        let deposit_params = DepositParams {
+        validate_min_deposit_and_duration(&deps, &info, duration)?;
+        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, (&info.sender, (pool_id, duration)))?;
+        let deposit_params = DepositParamsState {
             sender: info.sender,
             pool_id,
             duration,
@@ -167,9 +188,9 @@ pub mod execute {
     }
 
     pub fn unbond(
-        deps: DepsMut, info: MessageInfo, lock_id: u64, is_superfluid_staking: bool,
+        deps: DepsMut, info: MessageInfo, pool_id: u64, duration: u64, lock_id: u64, is_superfluid_staking: bool,
     ) -> Result<Response, ContractError> {
-        let wallet_address = get_lock_wallet(&deps, &info)?;
+        let wallet_address = get_lock_wallet(&deps, &info, pool_id, duration)?;
         let unbond_msg: CosmosMsg = WasmMsg::Execute {
             contract_addr: wallet_address.to_string(),
             msg: to_binary(&lock_wallet::msg::ExecuteMsg::Unbond {
@@ -185,9 +206,9 @@ pub mod execute {
     }
 
     pub fn withdraw(
-        deps: DepsMut, info: MessageInfo, amount: String, denom: String,
+        deps: DepsMut, info: MessageInfo, pool_id: u64, duration: u64, amount: String, denom: String,
     ) -> Result<Response, ContractError> {
-        let wallet_address = get_lock_wallet(&deps, &info)?;
+        let wallet_address = get_lock_wallet(&deps, &info, pool_id, duration)?;
         let withdraw_msg: CosmosMsg = WasmMsg::Execute {
             contract_addr: wallet_address.to_string(),
             msg: to_binary(&lock_wallet::msg::ExecuteMsg::Withdraw {
@@ -203,8 +224,8 @@ pub mod execute {
         )
     }
 
-    pub fn withdraw_all(deps: DepsMut, info: MessageInfo, lp_tokens_out: Option<Vec<LpToken>>) -> Result<Response, ContractError> {
-        let wallet_address = get_lock_wallet(&deps, &info)?;
+    pub fn withdraw_all(deps: DepsMut, info: MessageInfo, pool_id: u64, duration: u64, lp_tokens_out: Option<Vec<RemoveLiquidityParams>>) -> Result<Response, ContractError> {
+        let wallet_address = get_lock_wallet(&deps, &info, pool_id, duration)?;
         let withdraw_msg: CosmosMsg = WasmMsg::Execute {
             contract_addr: wallet_address.to_string(),
             msg: to_binary(&lock_wallet::msg::ExecuteMsg::WithdrawAll {
@@ -236,16 +257,25 @@ pub mod execute {
         Ok(())
     }
 
-    pub fn update_config(deps: DepsMut, info: MessageInfo, validator_address: Option<String>, lock_wallet_contract_code_id: Option<u64>, whitelist: Option<Vec<String>>) -> Result<Response, ContractError> {
+    pub fn update_config(deps: DepsMut, info: MessageInfo, nconfig: ConfigParams) -> Result<Response, ContractError> {
         validate_contract_owner(&deps, &info)?;
         CONFIG.update(deps.storage, |mut config| -> Result<ConfigResponse, ContractError> {
-            if let Some(validator_address) = validator_address {
+            if let Some(validator_address) = nconfig.validator_address {
                 config.validator_address = validator_address;
             }
-            if let Some(lock_wallet_contract_code_id) = lock_wallet_contract_code_id {
+            if let Some(lock_wallet_contract_code_id) = nconfig.lock_wallet_contract_code_id {
                 config.lock_wallet_contract_code_id = lock_wallet_contract_code_id;
             }
-            if let Some(whitelist) = whitelist {
+            if let Some(valid_durations) = nconfig.valid_durations {
+                config.valid_durations = valid_durations;
+            }
+            if let Some(min_deposit_default) = nconfig.min_deposit_default {
+                config.min_deposit_default = min_deposit_default;
+            }
+            if let Some(min_deposit_custom) = nconfig.min_deposit_custom {
+                config.min_deposit_custom = Some(min_deposit_custom);
+            }
+            if let Some(whitelist) = nconfig.whitelist {
                 if whitelist.len() > WHITELIST_MAX_LENGTH as usize {
                     return Err(ContractError::CustomError { val: "Too many whitelists".to_string() })
                 }
@@ -260,21 +290,24 @@ pub mod execute {
         Ok(Response::new())
     }
 
-    pub fn restake(deps: DepsMut, info: MessageInfo, lock_wallets: Vec<RestakeLockWallet>) -> Result<Response, ContractError> {
+    pub fn restake(
+        deps: DepsMut, info: MessageInfo, params: Vec<RestakeParams>,
+    ) -> Result<Response, ContractError> {
         validate_contract_whitelist(&deps, &info)?;
-        let msgs: Result<Vec<CosmosMsg>, _> = lock_wallets.into_iter().map(|item| -> Result<CosmosMsg, ContractError> {
-            let contract_address = deps.api.addr_validate(&item.contract_address)?;
+        let execute_msgs: Result<Vec<CosmosMsg>, _> = params.into_iter().map(|item| -> Result<CosmosMsg, ContractError> {
             Ok(WasmMsg::Execute {
-                contract_addr: contract_address.to_string(),
+                contract_addr: item.contract_address,
                 msg: to_binary(&lock_wallet::msg::ExecuteMsg::Restake {
-                    params: item.params,
+                    add_liquidity: item.add_liquidity,
+                    duration: item.duration,
+                    swap: item.swap,
                 })?,
                 funds: vec![],
             }.into())
         }).collect();
         Ok(Response::new()
             .add_attribute("action", "restake")
-            .add_messages(msgs?)
+            .add_messages(execute_msgs?)
         )
     }
 
@@ -295,37 +328,60 @@ pub mod execute {
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {  } => to_binary(&CONFIG.load(deps.storage)?),
-        QueryMsg::GetTotalAccount {  } => to_binary(&query::get_total_account(deps)?),
+        QueryMsg::GetTotalWallets {  } => to_binary(&query::get_total_wallets(deps)?),
         QueryMsg::GetLockWalletByAccount { address } => to_binary(&query::get_lock_wallet_by_account(deps, address)?),
-        QueryMsg::GetAccounts { limit, last_value } => to_binary(&query::get_accounts(deps, limit, last_value)?),
+        QueryMsg::GetWallets { limit, last_value } => to_binary(&query::get_wallets(deps, limit, last_value)?),
     }
 }
 
 pub mod query {
     use cw_storage_plus::Bound;
 
+    use crate::msg::LockWalletResponse;
+
     use super::*;
 
-    pub fn get_lock_wallet_by_account(deps: Deps, address: String) -> StdResult<Addr> {
+    pub fn get_lock_wallet_by_account(deps: Deps, address: String) -> StdResult<Vec<LockWalletResponse>> {
         let address = deps.api.addr_validate(&address)?;
-        let wallet_address = USER_LOCK_WALLET_MAPPING.load(deps.storage, &address)?;
-        Ok(wallet_address)
+        let wallet_addresses = USER_LOCK_WALLET_MAPPING
+            .prefix(&address)
+            .range(deps.storage, None, None, Order::Ascending)
+            .map(|item| {
+                let ((pool_id, duration), wallet_address) = item.unwrap();
+                LockWalletResponse {
+                    account: address.to_string(),
+                    pool_id,
+                    duration,
+                    contract_address: wallet_address.to_string(),
+                }
+            })
+            .collect();
+        Ok(wallet_addresses)
     }
 
-    pub fn get_total_account(deps: Deps) -> StdResult<u64> {
+    pub fn get_total_wallets(deps: Deps) -> StdResult<u64> {
         Ok(USER_LOCK_WALLET_MAPPING
             .range(deps.storage, None, None, Order::Ascending)
             .count() as u64
         )
     }
 
-    pub fn get_accounts(deps: Deps, limit: u64, last_value: Option<String>) -> StdResult<Vec<(Addr, Addr)>> {
+    pub fn get_wallets(deps: Deps, limit: u64, last_value: Option<String>) -> StdResult<Vec<LockWalletResponse>> {
         let min_value = last_value.map(|s| Bound::ExclusiveRaw(s.into()));
-        let wallets: StdResult<Vec<(Addr, Addr)>> = USER_LOCK_WALLET_MAPPING 
+        let wallets: Vec<LockWalletResponse> = USER_LOCK_WALLET_MAPPING 
             .range(deps.storage, min_value, None, Order::Ascending)
             .take(limit as usize)
+            .map(|item| {
+                let ((account, (pool_id, duration)), wallet_address) = item.unwrap();
+                LockWalletResponse {
+                    account: account.to_string(),
+                    pool_id,
+                    duration,
+                    contract_address: wallet_address.to_string(),
+                }
+            })
             .collect();
-        wallets
+        Ok(wallets)
     }
 }
 
@@ -347,7 +403,11 @@ pub mod reply {
         let res = parse_reply_instantiate_data(msg).map_err(|err| StdError::generic_err(err.to_string()))?;
         let contract_address = deps.api.addr_validate(&res.contract_address)?;
         let deposit_params = DEPOSIT_PARAMS_REPLY_STATE.load(deps.storage)?;
-        USER_LOCK_WALLET_MAPPING.save(deps.storage, &deposit_params.sender, &contract_address)?;
+        USER_LOCK_WALLET_MAPPING.save(
+            deps.storage,
+            (&deposit_params.sender, (deposit_params.pool_id, deposit_params.duration)),
+            &contract_address
+        )?;
         execute::deposit_to_lock_wallet(deps, contract_address.to_string(), deposit_params)
     }
 }
