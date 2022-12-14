@@ -98,8 +98,11 @@ pub mod execute {
     use lock_wallet;
     use common::types::{RemoveLiquidityParams};
 
-    fn get_lock_wallet(deps: &DepsMut, info: &MessageInfo, pool_id: u64, duration: u64) -> Result<Addr, ContractError> {
-        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, (&info.sender, (pool_id, duration)))?;
+    fn get_lock_wallet(
+        deps: &DepsMut, info: &MessageInfo, pool_id: u64, duration: u64
+    ) -> Result<Addr, ContractError> {
+        let wallet = USER_LOCK_WALLET_MAPPING
+            .may_load(deps.storage, (info.sender.clone(), (pool_id, duration)))?;
         if wallet.is_none() {
             return Err(ContractError::ValidationError { val: "Wallet not found".to_string() })
         }
@@ -147,7 +150,9 @@ pub mod execute {
         )
     }
 
-    fn validate_min_deposit_and_duration(deps: &DepsMut, info: &MessageInfo, duration: u64) -> Result<(), ContractError> {
+    fn validate_min_deposit_and_duration(
+        deps: &DepsMut, info: &MessageInfo, duration: u64
+    ) -> Result<(), ContractError> {
         let config = CONFIG.load(deps.storage)?;
         let has_invalid_fund = info.funds.clone().into_iter().any(|fund| {
             if let Some(min_deposit_custom) = config.min_deposit_custom.clone() {
@@ -170,9 +175,10 @@ pub mod execute {
         deps: DepsMut, env: Env, info: MessageInfo, pool_id: u64, duration: u64, share_out_min_amount: String, is_superfluid_staking: bool,
     ) -> Result<Response, ContractError> {
         validate_min_deposit_and_duration(&deps, &info, duration)?;
-        let wallet = USER_LOCK_WALLET_MAPPING.may_load(deps.storage, (&info.sender, (pool_id, duration)))?;
+        let wallet = USER_LOCK_WALLET_MAPPING
+            .may_load(deps.storage, (info.sender.clone(), (pool_id, duration)))?;
         let deposit_params = DepositParamsState {
-            sender: info.sender,
+            sender: info.sender.clone(),
             pool_id,
             duration,
             share_out_min_amount,
@@ -342,9 +348,9 @@ pub mod query {
     use super::*;
 
     pub fn get_lock_wallet_by_account(deps: Deps, address: String) -> StdResult<Vec<LockWalletResponse>> {
-        let address = deps.api.addr_validate(&address)?;
+        let account_address = deps.api.addr_validate(&address)?;
         let wallet_addresses = USER_LOCK_WALLET_MAPPING
-            .prefix(&address)
+            .prefix(account_address)
             .range(deps.storage, None, None, Order::Ascending)
             .map(|item| {
                 let ((pool_id, duration), wallet_address) = item.unwrap();
@@ -366,8 +372,12 @@ pub mod query {
         )
     }
 
-    pub fn get_wallets(deps: Deps, limit: u64, last_value: Option<String>) -> StdResult<Vec<LockWalletResponse>> {
-        let min_value = last_value.map(|s| Bound::ExclusiveRaw(s.into()));
+    pub fn get_wallets(deps: Deps, limit: u64, last_value: Option<(String, u64, u64)>) -> StdResult<Vec<LockWalletResponse>> {
+        let min_value = last_value.map(|s| {
+            let (address, pool_id, duration) = s;
+            let account_address = deps.api.addr_validate(&address).expect("Invalid address");
+            Bound::exclusive((account_address, (pool_id, duration)))
+        });
         let wallets: Vec<LockWalletResponse> = USER_LOCK_WALLET_MAPPING 
             .range(deps.storage, min_value, None, Order::Ascending)
             .take(limit as usize)
@@ -405,7 +415,7 @@ pub mod reply {
         let deposit_params = DEPOSIT_PARAMS_REPLY_STATE.load(deps.storage)?;
         USER_LOCK_WALLET_MAPPING.save(
             deps.storage,
-            (&deposit_params.sender, (deposit_params.pool_id, deposit_params.duration)),
+            (deposit_params.sender.clone(), (deposit_params.pool_id, deposit_params.duration)),
             &contract_address
         )?;
         execute::deposit_to_lock_wallet(deps, contract_address.to_string(), deposit_params)

@@ -84,7 +84,7 @@ pub enum QueryMsg {
     #[returns(Vec<String>)]
     GetWallets {
         limit: u64,
-        last_value: Option<String>,
+        last_value: Option<(String, u64, u64)>,
     },
     #[returns(u64)]
     GetTotalWallets {},

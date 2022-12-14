@@ -14,5 +14,5 @@ pub struct DepositParamsState {
 }
 
 pub const CONFIG: Item<ConfigResponse> = Item::new("config");
-pub const USER_LOCK_WALLET_MAPPING: Map<(&Addr, (u64, u64)), Addr> = Map::new("user_lock_wallet_mapping");
+pub const USER_LOCK_WALLET_MAPPING: Map<(Addr, (u64, u64)), Addr> = Map::new("user_lock_wallet_mapping");
 pub const DEPOSIT_PARAMS_REPLY_STATE: Item<DepositParamsState> = Item::new("deposit_params");
