@@ -1,5 +1,6 @@
 use common::types::{RemoveLiquidityParams, SwapParams, AddLiquidityParams};
 use cosmwasm_schema::{cw_serde, QueryResponses};
+use osmosis_std::types::osmosis::lockup::{LockedResponse};
 use cosmwasm_std::Addr;
 
 /// Message type for `instantiate` entry_point
@@ -45,5 +46,7 @@ pub struct MigrateMsg {}
 pub enum QueryMsg { 
     #[returns(Addr)]
     GetOwner {},
+    #[returns(LockedResponse)]
+    Test {},
 }
 

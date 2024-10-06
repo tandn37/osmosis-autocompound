@@ -277,17 +277,39 @@ pub mod execute {
 
 /// Handling contract query
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetOwner {  } => to_binary(&query::get_owner(deps)?)
+        QueryMsg::GetOwner {  } => to_binary(&query::get_owner(deps)?),
+        QueryMsg::Test {  } => to_binary(&query::test(deps, env)?),
     }
 }
 
 pub mod query {
+    use osmosis_std::types::osmosis::gamm::v2::QuerySpotPriceRequest;
+    use osmosis_std::types::{osmosis::{gamm::v1beta1::{
+        GammQuerier, QueryCalcJoinPoolSharesResponse, QuerySwapExactAmountInResponse, SwapAmountInRoute
+    }, epochs::v1beta1::{QueryCurrentEpochResponse, QueryEpochsInfoResponse}}, cosmos::base::v1beta1::Coin};
+    use osmosis_std::types::osmosis::epochs::v1beta1::{
+        EpochsQuerier
+    };
     use super::*;
 
     pub fn get_owner(deps: Deps) -> StdResult<Addr> {
         OWNER.load(deps.storage)
+    }
+
+    pub fn test(deps: Deps, _env: Env) -> StdResult<QuerySwapExactAmountInResponse> {
+        let routes = vec![SwapAmountInRoute {
+            pool_id: 1,
+            token_out_denom: "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2".to_string(),
+        }];
+        // let coins = vec![Coin { denom: "uosmo".to_string(), amount: "1000000".to_string()}];
+        // let res = GammQuerier::new(&deps.querier)
+        //     .calc_join_pool_shares(2, coins)?;
+        // let res = EpochsQuerier::new(&deps.querier).epoch_infos()?;
+        let res = GammQuerier::new(&deps.querier)
+            .estimate_swap_exact_amount_in(_env.contract.address.to_string(), 1, "1000000uosmo".to_string(), routes)?;
+        Ok(res)
     }
 }
 

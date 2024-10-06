@@ -32,7 +32,7 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 common = { path = "../common", version = "0.1.0" }
 
 semver = "1"
-osmosis-std = "0.1.7"
+osmosis-std = { git = "https://github.com/osmosis-labs/osmosis-rust.git", package = "osmosis-std" }
 cosmwasm-schema = "1.1.2"
 cosmwasm-std = "1.1.2"
 cosmwasm-storage = "1.1.2"

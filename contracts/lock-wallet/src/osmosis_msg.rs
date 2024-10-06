@@ -5,7 +5,7 @@ use osmosis_std::types::osmosis::gamm::v1beta1::{
   MsgSwapExactAmountIn, SwapAmountInRoute, MsgJoinSwapExternAmountIn, MsgExitSwapShareAmountIn
 };
 use osmosis_std::types::osmosis::lockup::{
-  MsgLockTokens, MsgBeginUnlocking
+  MsgLockTokens, MsgBeginUnlocking,
 };
 use osmosis_std::types::osmosis::superfluid::{
   MsgLockAndSuperfluidDelegate, MsgSuperfluidUndelegate, MsgSuperfluidUnbondLock,

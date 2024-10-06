@@ -1,1 +1,13 @@
-{}
+{
+  "testnet": {
+    "lock-wallet": {
+      "code_id": 6105,
+      "addresses": {
+        "default": "osmo1ravjdzrtvgnacfqxya8505kxq9mxcdex7mtu32tex2rlqmhwytfqgmwnkg"
+      },
+      "proposal": {
+        "store_code": null
+      }
+    }
+  }
+}
